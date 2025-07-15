@@ -1,366 +1,234 @@
-#!/usr/bin/env python3
+from dataclasses import dataclass
+from typing import List, Optional
+import json
 import struct
-import binascii
-import logging
-import argparse
-import os
-import sys
-from typing import Dict, List, Tuple, Optional, Set
-from pathlib import Path
 
-class MTKPreloaderAnalyzer:
-    def __init__(self):
-        self.logger = self._setup_logging()
-        self._init_patterns()
-        self._init_element_structures()
-        self._init_common_regions()
-        self._init_reserved_regions()
+# Define constants for UEFI/ARM memory attributes
+class ResourceType:
+    SYS_MEM = "SYS_MEM"
+    MEM_RES = "MEM_RES"
 
-    def _setup_logging(self):
-        """Configure logging system"""
-        logging.basicConfig(
-            level=logging.INFO,
-            format='%(asctime)s [%(levelname)s] %(message)s',
-            handlers=[
-                logging.FileHandler("preloader_analysis.log"),
-                logging.StreamHandler()
-            ]
-        )
-        return logging.getLogger(__name__)
+class ResourceAttribute:
+    SYS_MEM_CAP = "SYS_MEM_CAP"
+    UNCACHEABLE = "UNCACHEABLE"
 
-    def _init_patterns(self):
-        """Initialize known MTK header patterns"""
-        self.header_patterns = [
-            b"MTK_BLOADER_INFO",
-            b"MTK_BLDR_INFO",
-            b"MTK_BOOTLOADER_INFO",
-            b"MTK_BL_INFO",
-            b"BLOADER_INFO",
-            b"MM_BLOADER_INFO",
-            b"MMM",
-            b"\x4D\x4D\x4D"
+class MemoryType:
+    Conv = "Conventional"
+    BsCode = "BootServiceCode"
+    RtCode = "RuntimeCode"
+    Reserv = "Reserved"
+
+class CacheAttributes:
+    WRITE_BACK = "WRITE_BACK"
+    WRITE_BACK_XN = "WRITE_BACK_XN"
+    WRITE_THROUGH_XN = "WRITE_THROUGH_XN"
+    NS_DEVICE = "NS_DEVICE"
+    UNCACHEABLE = "UNCACHEABLE"
+
+# Data class for memory regions (similar to ARM_MEMORY_REGION_DESCRIPTOR_EX)
+@dataclass
+class MemoryRegion:
+    label: str
+    base_address: int
+    size: int
+    build_hob: str = "AddMem"
+    resource_type: str = ResourceType.SYS_MEM
+    resource_attribute: str = ResourceAttribute.SYS_MEM_CAP
+    memory_type: str = MemoryType.Conv
+    cache_attributes: str = CacheAttributes.WRITE_BACK
+
+    def to_dict(self):
+        """Convert MemoryRegion to dictionary for JSON export."""
+        return {
+            "label": self.label,
+            "base_address": f"0x{self.base_address:08X}",
+            "size": f"0x{self.size:08X}",
+            "build_hob": self.build_hob,
+            "resource_type": self.resource_type,
+            "resource_attribute": self.resource_attribute,
+            "memory_type": self.memory_type,
+            "cache_attributes": self.cache_attributes
+        }
+
+# Placeholder function to parse preloader and extract memory regions
+def parse_preloader_memory_regions() -> List[MemoryRegion]:
+    """
+    Simulates parsing a preloader to extract memory regions.
+    Replace with actual logic to parse your preloader (e.g., binary file, JSON, firmware API).
+    """
+    try:
+        # Example regions (replace with actual preloader data)
+        regions = [
+            MemoryRegion(
+                label="Peripherals",
+                base_address=0x00000000,
+                size=0x1B000000,  # 432 MB
+                resource_type=ResourceType.MEM_RES,
+                resource_attribute=ResourceAttribute.UNCACHEABLE,
+                memory_type=MemoryType.RtCode,
+                cache_attributes=CacheAttributes.NS_DEVICE
+            ),
+            MemoryRegion(
+                label="DDR Memory 1",
+                base_address=0x40000000,
+                size=0x10000000,  # 256 MB
+                resource_type=ResourceType.SYS_MEM,
+                resource_attribute=ResourceAttribute.SYS_MEM_CAP,
+                memory_type=MemoryType.Conv,
+                cache_attributes=CacheAttributes.WRITE_BACK
+            ),
+            MemoryRegion(
+                label="Frame Buffer",
+                base_address=0x50000000,
+                size=0x01000000,  # 16 MB
+                resource_type=ResourceType.MEM_RES,
+                resource_attribute=ResourceAttribute.SYS_MEM_CAP,
+                memory_type=MemoryType.Reserv,
+                cache_attributes=CacheAttributes.WRITE_THROUGH_XN
+            ),
+            MemoryRegion(
+                label="Reserved TEE",
+                base_address=0x51000000,
+                size=0x02000000,  # 32 MB
+                resource_type=ResourceType.MEM_RES,
+                resource_attribute=ResourceAttribute.SYS_MEM_CAP,
+                memory_type=MemoryType.Reserv,
+                cache_attributes=CacheAttributes.WRITE_BACK
+            )
         ]
+        return regions
+    except Exception as e:
+        print(f"Error parsing preloader: {str(e)}")
+        return []
 
-    def _init_element_structures(self):
-        """Define memory element structures"""
-        self.element_structures = [
-            {'size': 188, 'offsets': {'emi_cona': 28, 'dram_sizes': 36}},
-            {'size': 196, 'offsets': {'emi_cona': 32, 'dram_sizes': 40}},
-            {'size': 184, 'offsets': {'emi_cona': 24, 'dram_sizes': 32}},
-            {'size': 200, 'offsets': {'emi_cona': 36, 'dram_sizes': 44}}
-        ]
+# Example: Parsing a binary preloader file (uncomment and customize as needed)
+"""
+def parse_preloader_memory_regions() -> List[MemoryRegion]:
+    # Example: Parse a binary preloader file
+    # Assumes format: [4-byte region count][32-byte label][8-byte base][8-byte size][16-byte types/attrs...]
+    regions = []
+    try:
+        with open("preloader.bin", "rb") as f:
+            region_count = struct.unpack("<I", f.read(4))[0]
+            for _ in range(region_count):
+                label = f.read(32).decode("utf-8").rstrip("\x00")
+                base_address = struct.unpack("<Q", f.read(8))[0]
+                size = struct.unpack("<Q", f.read(8))[0]
+                resource_type = f.read(16).decode("utf-8").rstrip("\x00")
+                resource_attribute = f.read(16).decode("utf-8").rstrip("\x00")
+                memory_type = f.read(16).decode("utf-8").rstrip("\x00")
+                cache_attributes = f.read(16).decode("utf-8").rstrip("\x00")
+                regions.append(MemoryRegion(
+                    label=label,
+                    base_address=base_address,
+                    size=size,
+                    resource_type=resource_type,
+                    resource_attribute=resource_attribute,
+                    memory_type=memory_type,
+                    cache_attributes=cache_attributes
+                ))
+        return regions
+    except Exception as e:
+        print(f"Error parsing preloader: {str(e)}")
+        return []
+"""
 
-    def _init_common_regions(self):
-        """Standard memory regions for MTK devices"""
-        self.common_regions = [
-            {
-                'label': "Peripherals",
-                'base': 0x00000000,
-                'size': 0x1B000000,
-                'build_hob': "AddMem",
-                'res_type': "MEM_RES",
-                'res_attr': "UNCACHEABLE",
-                'mem_type': "RtCode",
-                'cache_attr': "NS_DEVICE",
-                'fixed': True
-            }
-        ]
-
-    def _init_reserved_regions(self):
-        """Reserved regions with updated addresses"""
-        self.reserved_regions = [
-            {
-                'label': "TEE Reserved",
-                'base': 0x7CD00000,
-                'size': 0x03200000,
-                'build_hob': "AddMem",
-                'res_type': "MEM_RES",
-                'res_attr': "SYS_MEM_CAP",
-                'mem_type': "Reserv",
-                'cache_attr': "WRITE_BACK",
-                'fixed': False
-            },
-            {
-                'label': "Display Reserved",
-                'base': 0x7BEE0000,
-                'size': 0x00E20000,
-                'build_hob': "AddMem",
-                'res_type': "MEM_RES",
-                'res_attr': "SYS_MEM_CAP",
-                'mem_type': "Reserv",
-                'cache_attr': "WRITE_THROUGH_XN",
-                'fixed': False
-            }
-        ]
-
-    def analyze(self, preloader_file: str, output_dir: str = None):
-        """Main analysis workflow"""
-        try:
-            self.logger.info(f"Analyzing preloader file: {preloader_file}")
-            data = self._read_preloader(preloader_file)
-            
-            header_offset = self._find_header(data)
-            if header_offset == -1:
-                self.logger.warning("Header not found, using default memory map")
-                memory_map = self._generate_default_memory_map()
-            else:
-                elements = self._parse_all_elements(data, header_offset)
-                if not elements:
-                    self.logger.warning("No valid elements found, using default memory map")
-                    memory_map = self._generate_default_memory_map()
-                else:
-                    memory_map = self._generate_memory_map(elements)
-
-            output_file = self._get_output_path(preloader_file, output_dir)
-            self._write_memory_map(memory_map, output_file)
-            self.logger.info(f"Memory map generated at {output_file}")
+# Check for memory region overlaps
+def check_memory_region_overlap(regions: List[MemoryRegion], new_region: MemoryRegion) -> bool:
+    """
+    Checks if the new region overlaps with existing regions.
+    Returns True if an overlap is detected, False otherwise.
+    """
+    for region in regions:
+        if region.size == 0:  # Skip terminator
+            continue
+        existing_end = region.base_address + region.size
+        new_end = new_region.base_address + new_region.size
+        if (new_region.base_address < existing_end) and (region.base_address < new_end):
+            print(f"Error: Overlap detected with region {region.label}")
             return True
-        except Exception as e:
-            self.logger.error(f"Analysis failed: {str(e)}")
-            return False
+    return False
 
-    def _read_preloader(self, filename: str) -> bytes:
-        """Read preloader file with validation"""
-        try:
-            MAX_FILE_SIZE = 16 * 1024 * 1024
-            if not os.path.exists(filename):
-                raise FileNotFoundError(f"File does not exist: {filename}")
-            
-            file_size = os.path.getsize(filename)
-            if file_size == 0:
-                raise ValueError("File is empty (0 bytes)")
-            if file_size > MAX_FILE_SIZE:
-                raise ValueError(f"File too large (>{MAX_FILE_SIZE} bytes)")
-            
-            with open(filename, 'rb') as f:
-                data = f.read()
-                if len(data) != file_size:
-                    raise IOError(f"File read incomplete: expected {file_size} bytes, got {len(data)}")
-                return data
-        except Exception as e:
-            self.logger.error(f"Failed to read preloader file: {str(e)}")
-            raise
-
-    def _find_header(self, data: bytes) -> int:
-        """Find preloader header"""
-        for offset in [0x0, 0x400, 0x800, 0x1000, 0x2000]:
-            if offset + 16 > len(data):
-                continue
-            for pattern in self.header_patterns:
-                if data[offset:offset+len(pattern)] == pattern:
-                    self.logger.info(f"Found header '{pattern.decode('ascii', errors='ignore')}' at 0x{offset:08X}")
-                    return offset
-        return -1
-
-    def _parse_all_elements(self, data: bytes, header_offset: int) -> List[Dict]:
-        """Parse all memory elements"""
-        elements = []
-        for i in range(12):  # Try up to 12 elements
-            for struct_def in self.element_structures:
-                elem_offset = header_offset + 0x70 + (i * struct_def['size'])
-                element = self._parse_element(data, elem_offset, struct_def)
-                if element and element.get('total_dram_mb', 0) > 0:
-                    elements.append(element)
-                    break
-        return elements
-
-    def _parse_element(self, data: bytes, offset: int, struct_def: Dict) -> Optional[Dict]:
-        """Parse single memory element"""
-        try:
-            if offset + struct_def['size'] > len(data):
-                return None
-
-            emi_cona = struct.unpack_from('<I', data, offset + struct_def['offsets']['emi_cona'])[0]
-            dram_sizes = struct.unpack_from('<4I', data, offset + struct_def['offsets']['dram_sizes'])
-
-            total_mb = sum(s//(1024*1024) for s in dram_sizes if s > 0)
-            if not (64 <= total_mb <= 8192):  # Validate DRAM size
-                return None
-
-            return {
-                'offset': offset,
-                'emi_cona': emi_cona,
-                'dram_rank_size': dram_sizes,
-                'total_dram_mb': total_mb,
-                'structure_size': struct_def['size']
-            }
-        except Exception as e:
-            self.logger.debug(f"Failed to parse element at 0x{offset:08X}: {str(e)}")
+# Generate memory map from preloader data
+def generate_memory_map() -> Optional[List[MemoryRegion]]:
+    """
+    Generates a memory map by parsing the preloader and validating regions.
+    Returns a list of MemoryRegion objects or None if generation fails.
+    """
+    try:
+        # Step 1: Parse preloader to extract memory regions
+        preloader_regions = parse_preloader_memory_regions()
+        if not preloader_regions:
+            print("Error: No regions extracted from preloader")
             return None
 
-    def _generate_memory_map(self, elements: List[Dict]) -> List[Dict]:
-        """Generate memory map"""
-        regions = []
-        used_addresses = set()
-        
-        # Add fixed regions
-        for region in self.common_regions:
-            regions.append(region)
-            used_addresses.add((region['base'], region['base'] + region['size']))
-        
-        # Add DRAM regions
-        current_address = 0x40000000
-        for element in elements:
-            size = element['total_dram_mb'] * 1024 * 1024
-            current_address = (current_address + 0xFFFFF) & ~0xFFFFF  # Align
-            
+        # Step 2: Validate and build memory map
+        memory_map = []
+        for region in preloader_regions:
+            # Validate region
+            if not region.label or region.size <= 0:
+                print(f"Error: Invalid region: {region.label}, size: {region.size}")
+                return None
+
             # Check for overlaps
-            overlap = False
-            for (start, end) in used_addresses:
-                if not (current_address + size <= start or current_address >= end):
-                    overlap = True
-                    break
-            
-            if not overlap and size > 0:
-                regions.append({
-                    'label': f"DRAM {len([r for r in regions if 'DRAM' in r['label']])}",
-                    'base': current_address,
-                    'size': size,
-                    'build_hob': "AddMem",
-                    'res_type': "SYS_MEM",
-                    'res_attr': "SYS_MEM_CAP",
-                    'mem_type': "Conv",
-                    'cache_attr': "WRITE_BACK_XN"
-                })
-                used_addresses.add((current_address, current_address + size))
-                current_address += size
-        
-        # Add reserved regions if they don't overlap
-        for region in self.reserved_regions:
-            overlap = False
-            for (start, end) in used_addresses:
-                if not (region['base'] + region['size'] <= start or region['base'] >= end):
-                    overlap = True
-                    break
-            
-            if not overlap:
-                regions.append(region)
-                used_addresses.add((region['base'], region['base'] + region['size']))
-        
-        # Add UEFI regions
-        self._add_uefi_regions(regions, used_addresses)
-        
-        # Add terminator
-        regions.append({
-            'label': "Terminator",
-            'base': 0,
-            'size': 0,
-            'build_hob': "0",
-            'res_type': "0",
-            'res_attr': "0",
-            'mem_type': "0",
-            'cache_attr': "0"
-        })
-        
-        return sorted(regions, key=lambda x: x['base'])
+            if check_memory_region_overlap(memory_map, region):
+                print(f"Error: Region {region.label} overlaps with existing regions")
+                return None
 
-    def _add_uefi_regions(self, regions: List[Dict], used_addresses: Set[Tuple[int, int]]):
-        """Add UEFI regions"""
-        uefi_regions = [
-            {'label': "UEFI Stack", 'size': 0x00040000, 'mem_type': "BsData"},
-            {'label': "CPU Vectors", 'size': 0x00010000, 'mem_type': "BsCode"},
-            {'label': "DXE Heap", 'size': 0x01000000, 'mem_type': "Conv"}
-        ]
-        
-        # Find last DRAM region
-        last_dram = next((r for r in reversed(regions) if 'DRAM' in r['label']), None)
-        if last_dram:
-            base = last_dram['base'] + last_dram['size']
-            
-            for region in uefi_regions:
-                base = (base + 0xFFFFF) & ~0xFFFFF  # Align
-                regions.append({
-                    'label': region['label'],
-                    'base': base,
-                    'size': region['size'],
-                    'build_hob': "AddMem",
-                    'res_type': "SYS_MEM",
-                    'res_attr': "SYS_MEM_CAP",
-                    'mem_type': region['mem_type'],
-                    'cache_attr': "WRITE_BACK"
-                })
-                base += region['size']
+            # Add region to memory map
+            memory_map.append(region)
 
-    def _generate_default_memory_map(self) -> List[Dict]:
-        """Generate default memory map"""
-        regions = []
-        regions.extend(self.common_regions)
-        
-        # Add default DRAM (4GB)
-        regions.append({
-            'label': "DRAM 0",
-            'base': 0x40000000,
-            'size': 0x100000000,
-            'build_hob': "AddMem",
-            'res_type': "SYS_MEM",
-            'res_attr': "SYS_MEM_CAP",
-            'mem_type': "Conv",
-            'cache_attr': "WRITE_BACK_XN"
-        })
-        
-        # Add UEFI regions
-        self._add_uefi_regions(regions, set())
-        
-        # Add terminator
-        regions.append({
-            'label': "Terminator",
-            'base': 0,
-            'size': 0,
-            'build_hob': "0",
-            'res_type': "0",
-            'res_attr': "0",
-            'mem_type': "0",
-            'cache_attr': "0"
-        })
-        
-        return regions
+        # Step 3: Add terminator (for UEFI compatibility)
+        memory_map.append(MemoryRegion(
+            label="Terminator",
+            base_address=0,
+            size=0
+        ))
 
-    def _get_output_path(self, input_file: str, output_dir: str = None) -> str:
-        """Get output file path"""
-        if output_dir:
-            os.makedirs(output_dir, exist_ok=True)
-            base_name = os.path.basename(input_file)
-            return os.path.join(output_dir, f"PlatformMemoryMap_{os.path.splitext(base_name)[0]}.c")
-        return f"PlatformMemoryMap_{os.path.splitext(os.path.basename(input_file))[0]}.c"
+        return memory_map
 
-    def _write_memory_map(self, regions: List[Dict], filename: str):
-        """Write memory map to file"""
-        try:
-            with open(filename, 'w') as f:
-                f.write("/**\n * Auto-generated memory map\n */\n\n")
-                f.write("#include <Library/BaseLib.h>\n")
-                f.write("#include <Library/PlatformMemoryMapLib.h>\n\n")
-                f.write("static ARM_MEMORY_REGION_DESCRIPTOR_EX gDeviceMemoryDescriptorEx[] = {\n")
-                f.write("    /* Label, Base, Size, BuildHob, ResType, ResAttr, MemType, CacheAttr */\n")
-                
-                for region in regions:
-                    f.write(f"    {{\"{region['label']}\", 0x{region['base']:08X}, 0x{region['size']:08X}, "
-                           f"{region['build_hob']}, {region['res_type']}, {region['res_attr']}, "
-                           f"{region['mem_type']}, {region['cache_attr']}")
-                    if region['label'] != "Terminator":
-                        f.write("},\n")
-                    else:
-                        f.write("}\n")
-                
-                f.write("};\n\n")
-                f.write("ARM_MEMORY_REGION_DESCRIPTOR_EX *GetPlatformMemoryMap()\n{\n    return gDeviceMemoryDescriptorEx;\n}\n")
-        except IOError as e:
-            self.logger.error(f"Failed to write output file: {str(e)}")
-            raise
+    except Exception as e:
+        print(f"Error generating memory map: {str(e)}")
+        return None
 
-def main():
-    parser = argparse.ArgumentParser(description="MTK Preloader Memory Map Generator")
-    parser.add_argument("preloader", help="Path to preloader image file")
-    parser.add_argument("-o", "--output", help="Output directory")
-    parser.add_argument("-v", "--verbose", action="store_true", help="Verbose output")
-    args = parser.parse_args()
+# Export memory map to JSON (optional)
+def export_memory_map_to_json(memory_map: List[MemoryRegion], filename: str = "memory_map.json"):
+    """
+    Exports the memory map to a JSON file for integration with other systems.
+    """
+    try:
+        with open(filename, "w") as f:
+            json.dump([region.to_dict() for region in memory_map], f, indent=2)
+        print(f"Memory map exported to {filename}")
+    except Exception as e:
+        print(f"Error exporting memory map to JSON: {str(e)}")
 
-    analyzer = MTKPreloaderAnalyzer()
-    if args.verbose:
-        analyzer.logger.setLevel(logging.DEBUG)
+# Main function to get the platform memory map
+def get_platform_memory_map() -> Optional[List[MemoryRegion]]:
+    """
+    Main entry point to generate and return the platform memory map.
+    """
+    memory_map = generate_memory_map()
+    if memory_map is None:
+        print("Failed to generate memory map")
+        return None
+    
+    # Print the generated memory map for debugging
+    print("Generated Memory Map:")
+    for region in memory_map:
+        print(f"Label: {region.label}, Base: 0x{region.base_address:08X}, Size: 0x{region.size:08X}, "
+              f"Type: {region.resource_type}, Attr: {region.resource_attribute}, "
+              f"MemType: {region.memory_type}, Cache: {region.cache_attributes}")
+    
+    # Optionally export to JSON
+    export_memory_map_to_json(memory_map)
+    
+    return memory_map
 
-    if not analyzer.analyze(args.preloader, args.output):
-        sys.exit(1)
-
+# Example usage
 if __name__ == "__main__":
-    main()
+    memory_map = get_platform_memory_map()
+    if memory_map:
+        print("Memory map generated successfully!")
+    else:
+        print("Failed to generate memory map")
